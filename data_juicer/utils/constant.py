@@ -153,6 +153,7 @@ class CleaningKeys(object):
     blurriness = DEFAULT_PREFIX + 'blurriness'
     cv2_blurriness_label = DEFAULT_PREFIX + 'is_cv2_blurriness_issue'
     validation = DEFAULT_PREFIX + 'is_validation_issue'
+    validation_point_cloud = DEFAULT_PREFIX + 'is_validation_point_cloud_issue'
 
 class EmbKeys(object):
     image_embedding = DEFAULT_PREFIX + 'image_embedding'
