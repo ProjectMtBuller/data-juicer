@@ -1,12 +1,10 @@
 import numpy as np
 
-from data_juicer.utils.constant import Fields, StatsKeys, CleaningKeys
-from data_juicer.utils.mm_utils import load_image
+from data_juicer.utils.constant import CleaningKeys
 
 from ..base_op import OPERATORS, Filter
 from ..op_fusion import LOADED_IMAGES
 
-import cv2
 import numpy as np
 import os
 
@@ -38,7 +36,7 @@ class PointCloudValidationFilter(Filter):
         if CleaningKeys.validation_point_cloud in sample:
             return sample
 
-        sample[CleaningKeys.validation_point_cloud] = np.array([])
+        sample[CleaningKeys.validation_point_cloud] = []
         # there is no image in this sample
         if self.point_cloud_key not in sample or not sample[self.point_cloud_key]:
             sample[CleaningKeys.validation_point_cloud] = np.array(
@@ -48,13 +46,13 @@ class PointCloudValidationFilter(Filter):
         # load images
         loaded_point_cloud_keys = sample[self.point_cloud_key]
         for loaded_point_cloud_key in loaded_point_cloud_keys:
-            sample[CleaningKeys.validation_point_cloud] = np.append(sample[CleaningKeys.validation_point_cloud], os.path.isfile(loaded_point_cloud_key))
+            sample[CleaningKeys.validation_point_cloud].append(int(not os.path.isfile(loaded_point_cloud_key)))
 
         return sample
         
 
     def process(self, sample):
-        validation = sample[CleaningKeys.validation_point_cloud]
+        validation = np.array(sample[CleaningKeys.validation_point_cloud])
         
         if self.any:
             return not validation.any()

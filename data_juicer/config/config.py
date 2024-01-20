@@ -407,10 +407,12 @@ def init_setup_from_cfg(cfg):
                 args = {
                     'text_key': text_key,
                     'image_key': cfg.image_key,
+                    'point_cloud_key': cfg.point_cloud_key
                 }
             elif args['text_key'] is None:
                 args['text_key'] = text_key
                 args['image_key'] = cfg.image_key
+                args['point_cloud_key'] = cfg.point_cloud_key
             op[op_name] = args
 
     return cfg
