@@ -2,10 +2,10 @@
 
 # global parameters
 project_name: 'demo-gn6'
-dataset_path: './demos/data_gn6/gn_simple.jsonl'  # path to your dataset directory or file
+dataset_path: './demos/data_gn6/gn_all.jsonl'  # path to your dataset directory or file
 np: 112  # number of subprocess to process your dataset
 
-export_path: './outputs/demo-gn6/demo-processed.jsonl'
+export_path: './outputs/demo-gn6/demo-processed_all.jsonl'
 # keep_cleaning_stas_in_res_ds: False
 # keep_hashes_in_res_ds: False
 
@@ -14,6 +14,8 @@ export_path: './outputs/demo-gn6/demo-processed.jsonl'
 process:
   - image_validation_filter:
   - point_cloud_validation_filter:
+  - general_file_validation_filter:
+      general_file_key: 'hardware_config'
   # - image_blurriness_filter:
   # - image_brightness_filter:
   # - image_deduplicator:

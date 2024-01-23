@@ -155,7 +155,8 @@ class CleaningKeys(object):
     validation = DEFAULT_PREFIX + 'is_validation_issue'
     validation_point_cloud = DEFAULT_PREFIX + 'is_validation_point_cloud_issue'
     validation_3d_annotation = DEFAULT_PREFIX + 'is_validation_3d_annotation_issue'
-
+    validation_general_file = DEFAULT_PREFIX + "is_validation_general_file_issue"
+    
 class EmbKeys(object):
     image_embedding = DEFAULT_PREFIX + 'image_embedding'
     text_embedding = DEFAULT_PREFIX + 'text_embedding'
