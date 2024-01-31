@@ -13,6 +13,8 @@ import data_juicer.platform.src.pages.data_analysis
 # import data_juicer.platform.src.pages.model_analysis
 import streamlit as st
 from streamlit_option_menu import option_menu
+import streamlit_authenticator as stauth
+
 
 # Page Favicon
 favicon = PIL.Image.open('./data_juicer/platform/src/assets/favicon.png')

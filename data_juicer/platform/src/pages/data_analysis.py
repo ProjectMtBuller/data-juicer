@@ -7,14 +7,36 @@
 import numpy as np
 import pandas as pd
 import faiss
+import json
+import io
+import os
+import random
 from PIL import Image
 import altair as alt
 import plotly.graph_objects as go
 import torch.nn.functional as F
 import streamlit as st
-from data_juicer.format.load import load_formatter
 from data_juicer.utils.model_utils import get_model, prepare_model
-import base64
+import extra_streamlit_components as stx
+from data_juicer.common.mysql_helper import get_starrocks_helper, get_db_helper
+from data_juicer.platform.src.utils.vis import draw_sankey_diagram
+from data_juicer.platform.src.utils.vis_common import vis_annotation
+import streamlit.components.v1 as components
+import sweetviz as sv
+
+annotation_categories = {'物流车-3D-点云目标预测': 'hd_3d_box_1002',
+                         '物流车-3D-点云目标检测': 'hd_3d_box_1001',
+                         '物流车-3D道路边缘线BEV连续帧': 'hd_lane_edge_3d_bev_clip',
+                         '物流车-2D-视觉红绿灯': 'hd_2d_traffic_light_1001',
+                         '乘用车-2D&3D-障碍物联合标注连续帧': 'icu30_2d_3d_key_point_clip',
+                         '乘用车-2D&3D-障碍物联合标注': 'icu30_2d_3d_box_1001',
+                         '乘用车-3D-点云目标预测': 'icu30_3d_box_1002',
+                         '乘用车-3D-点云目标检测': 'icu30_3d_box_1001',
+                         '4D视觉车道线-BEV-3.0': 'lane_clip_stage_1_3.0',
+                         '乘用车-3D道路边缘线BEV连续帧': 'icu30_lane_edge_3d_bev_clip',
+                         '乘用车-3D-点云道路边缘线': 'road_edge_line_3d_bundle',
+                         '乘用车-2D-视觉红绿灯': 'icu30_2d_traffic_light_1001'
+                         }
 
 
 @st.cache_resource
@@ -30,36 +52,12 @@ def create_faiss_index(emb_list):
     faiss_index.add(image_embeddings)
     return faiss_index
 
-def display_dataset(dataframe, cond, show_num, desp, type, all=True):
-    examples = dataframe.loc[cond]
-    if all or len(examples) > 0:
-        st.subheader(
-            f'{desp}: :red[{len(examples)}] of '
-            f'{len(dataframe.index)} {type} '
-            f'(:red[{len(examples)/len(dataframe.index) * 100:.2f}%])')
-
-        st.dataframe(examples[:show_num], use_container_width=True)
-
-
-def display_image_grid(urls, cols=3, width=300):
-    num_rows = int(np.ceil(len(urls) / cols))
-    image_grid = np.zeros((num_rows * width, cols * width, 3), dtype=np.uint8)
-
-    for i, url in enumerate(urls):
-        image = Image.open(url)
-        image = image.resize((width, width))
-        image = np.array(image)
-        row = i // cols
-        col = i % cols
-        image_grid[row * width:(row + 1) * width, col * width:(col + 1) * width, :] = image
-
-    st.image(image_grid, channels="RGB")
-
-
 @st.cache_data
-def convert_to_jsonl(df):
-    return df.to_json(orient='records', lines=True, force_ascii=False).encode('utf_8_sig')
-
+def convert_to_parquet(dataframe):
+    buffer = io.BytesIO()
+    dataframe.to_parquet(buffer, engine='pyarrow')
+    parquet_data = buffer.getvalue()
+    return parquet_data
 
 def plot_image_clusters(dataset):
     __dj__image_embedding_2d = np.array(dataset['__dj__image_embedding_2d'])
@@ -81,105 +79,251 @@ def plot_image_clusters(dataset):
     return marker_chart
 
 
+@st.cache_data
+def load_data_from_starrocks(category):
+    starrocks_helper = get_starrocks_helper(database='perfect_travel')
+    meta_qur_sql=f"""
+            select 
+                *
+            from perfect_travel.ods_annotation_day
+            where annotation_type='{category}'
+                and bundle_path != ""
+                and demand_source = "RD"
+                -- and sensor_name = "front_middle_camera"
+            limit 1000;
+        """
+    df = starrocks_helper.read_db_to_df(meta_qur_sql)
+    starrocks_helper.close()
+    return df
+
+@st.cache_data
+def count_from_starrocks(category):
+    starrocks_helper = get_starrocks_helper(database='perfect_travel')
+    meta_qur_sql=f"""
+            SELECT COUNT(*)
+            FROM perfect_travel.ods_annotation_day
+            WHERE annotation_type = '{category}'
+               -- AND bundle_path != "";
+        """
+    df = starrocks_helper.read_db_to_df(meta_qur_sql)
+    starrocks_helper.close()
+    return df.iloc[0]['count(*)']
+
+@st.cache_data
+def load_tag_names_from_mysql(category):
+    starrocks_helper = get_starrocks_helper(database='share_pipeline')
+    meta_qur_sql=f"""
+            SELECT DISTINCT tag_name
+            FROM share_pipeline.ads_custom_annotation_tags
+            WHERE annotation_type = '{category}';
+        """
+    df = starrocks_helper.read_db_to_df(meta_qur_sql)
+    tag_names = df.tag_name.tolist()
+    starrocks_helper.close()
+    return tag_names
+
+
+@st.cache_data
+def load_df_from_mysql(sql_str):
+    starrocks_helper = get_starrocks_helper(database='share_pipeline')
+    df = starrocks_helper.read_db_to_df(sql_str)
+    starrocks_helper.close()
+    return df
+
+def download_clean_data(category, clean_tag_names):
+    starrocks_helper = get_starrocks_helper(database='share_pipeline')
+    sql_clean_str = ''
+    for tag_name in clean_tag_names:
+        sql_clean_str += f" and not (tag_name = '{tag_name}' and tag_value != 0)"
+    meta_qur_sql=f"""
+            select 
+                annotation_path
+            from share_pipeline.ads_custom_annotation_tags
+            where annotation_type='{category}'
+                and demand_source = "RD"
+                {sql_clean_str};
+        """
+    df = starrocks_helper.read_db_to_df(meta_qur_sql)
+    print(df)
+    starrocks_helper.close()
+    return convert_to_parquet(df)
+
 
 def write():
-    theme_plotly = None
-    tab_data_cleaning, tab_data_mining, tab_data_insights = st.tabs(['数据清洗', '数据挖掘', '数据洞察'])
+    chosen_id = stx.tab_bar(data=[
+                    stx.TabBarItemData(id="data_show", title="数据展示", description=""),
+                    stx.TabBarItemData(id="data_cleaning", title="数据清洗", description=""),
+                    stx.TabBarItemData(id="data_mining", title="数据挖掘", description=""),
+                    stx.TabBarItemData(id="data_insights", title="数据洞察", description=""),
+                ], default="data_show")
 
-    try:
-        formatter = load_formatter('./outputs/demo-gn/demo-processed.jsonl')
-        processed_dataset = formatter.load_dataset(4)
-    except:
-        st.warning('请先执行数据处理流程 !')
-        st.stop()
+    if chosen_id == 'data_show':
+        # 选择数据集
+        category = annotation_categories[st.selectbox("选择数据类型", list(annotation_categories.keys()))]
+        df = load_data_from_starrocks(category)
+        cnt = count_from_starrocks(category)
 
+        st.write(f"共有{cnt}条数据, 展示前1000条数据")
+        st.dataframe(df, height=350)
 
-    with tab_data_cleaning:
-        filter_nums = {}
-        # iterate over the dataset to count the number of samples that are discarded
-        all_conds = np.ones(len(processed_dataset['image']), dtype=bool)
-        for key in processed_dataset.features:
-            if 'issue' not in key:
-                continue
-            all_conds = all_conds & (np.array(processed_dataset[key]) == False)
-            filter_nums[key] = sum(np.array(processed_dataset[key]) == True)
-
-        def draw_sankey_diagram(source_data, target_data, value_data, labels):
-            fig = go.Figure(data=[go.Sankey(
-                node=dict(
-                    pad=15,
-                    thickness=20,
-                    line=dict(color='black', width=0.5),
-                    label=labels
-                ),
-                link=dict(
-                    source=source_data,
-                    target=target_data,
-                    value=value_data
-                )
-            )])
-            fig.update_layout(title_text="数据清洗比例统计", title_font=dict(size=25), font_size=16)
-            st.plotly_chart(fig)
-
-        cnt = 1
-        source_data = [0]
-        target_data = [cnt]
-        # value_data = [1 - sum(filter_nums.values()) / len(processed_dataset['image'])]
-        value_data = [sum(all_conds) / len(processed_dataset['image'])]
-        labels = ['Origin', 'Retained: ' + str(round(value_data[0]*100, 2)) + '%']
-        for key, value in filter_nums.items():
-            if value == 0:
-                continue
-            cnt += 1
-            source_data.append(0)
-            target_data.append(cnt)
-            value_data.append(value/len(processed_dataset[key]))
-            labels.append('Discarded_' + key + ": " + str(round(value_data[-1]*100, 2)) + '%')
+        # 数据集示例可视化
         
-        draw_sankey_diagram(source_data, target_data, value_data, labels)
-        ds = pd.DataFrame(processed_dataset)
-        # all_conds = np.ones(len(ds.index), dtype=bool)
-        display_dataset(ds, all_conds, 10, 'Retained sampels', 'images')
-        st.download_button('Download Retained data as JSONL',
-                           data=convert_to_jsonl(ds.loc[all_conds]),
-                           file_name='retained.jsonl')
-        display_dataset(ds, np.invert(all_conds), 10, 'Discarded sampels', 'images')
-        st.download_button('Download Discarded data as JSONL',
-                           data=convert_to_jsonl(ds.loc[np.invert(all_conds)]),
-                           file_name='discarded.jsonl')
-
-    with tab_data_mining:
-        # st.markdown("<h1 style='text-align: center; font-size:25px; color: black;'>以文搜图", unsafe_allow_html=True)
-        if '__dj__image_embedding_2d' not in processed_dataset.features:
-            st.warning('请先执行数据处理流程(加入特征提取的算子) !')
+        with st.expander('show image', expanded=True):
+            with st.spinner('图像绘制中...'):
+                if st.button("点击展示随机图像"):
+                    annotation_path = random.choice(df['annotation_path'])
+                    random_image = vis_annotation(category, annotation_path)
+                    st.image(random_image, caption=annotation_path, use_column_width=True)
+    
+    elif chosen_id == 'data_cleaning':
+        # 选择数据集
+        category = annotation_categories[st.selectbox("选择数据类型", list(annotation_categories.keys()))]
+        cnt = count_from_starrocks(category)
+        tag_names = load_tag_names_from_mysql(category)
+        clean_tag_names = [_ for _ in tag_names if 'issue' in _]
+        if len(clean_tag_names) == 0:
+            st.error("该品类数据暂未清洗")
             st.stop()
+        
+        filter_num = {}
+        for tag_name in clean_tag_names:
+            sql_str = f"""
+                SELECT COUNT(*)
+                FROM share_pipeline.ads_custom_annotation_tags
+                WHERE annotation_type = '{category}'
+                    AND demand_source = "RD"
+                    AND tag_name = '{tag_name}'
+                    AND tag_value != 0;
+            """
+            df_select = load_df_from_mysql(sql_str)
+            filter_num[tag_name] = df_select.iloc[0]['count(*)']
+        
 
-        faiss_index = create_faiss_index(processed_dataset['__dj__image_embedding'])
+        # 绘制 sankey 图
+        value_data, labels = [], ['Original']
+        source_data = [0, 0]
+        target_data = [1, 2]
+
+        for idx, tag_name in enumerate(clean_tag_names):
+            source_data.extend([idx * 2 - 1] * 2)
+            target_data.extend([idx * 2 + 1, idx * 2 + 2])
+            
+            retained_num = cnt - filter_num[tag_name]
+            value_data.extend([retained_num, cnt - retained_num])
+            labels.extend([f"{tag_name}_retained", f"{tag_name}_discarded"])
+
+        pos_x = [0] + [0.9 / len(clean_tag_names) * (i + 1) for i in range(len(clean_tag_names)) for _ in range(2)]
+        pos_y = [0.3] + [0.3, 0.8] * len(clean_tag_names)
+
+        fig = draw_sankey_diagram(source_data, target_data, value_data, labels, pos_x, pos_y)
+        st.plotly_chart(fig)
+
+        # 数据导出
+        st.subheader('二、清洗数据导出')
+        df = load_data_from_starrocks(category)
+        df_clean = df.iloc[0:100]
+        st.dataframe(df)
+        st.download_button('下载parquet格式文件',
+                           data=download_clean_data(category, clean_tag_names),
+                           file_name=category+'.parquet')
+        
+
+        # 数据清洗详情
+        st.subheader('三、清洗详情')
+
+        for idx,tag_name in enumerate(clean_tag_names):
+            sql_str = f"""
+                SELECT COUNT(*)
+                FROM share_pipeline.ads_custom_annotation_tags
+                WHERE annotation_type = '{category}'
+                    AND tag_name = '{tag_name}'
+                    AND tag_value != 0;
+            """
+            df_select = load_df_from_mysql(sql_str)
+            discarded_num = df_select.iloc[0]['count(*)']
+            st.write(f"{tag_name}: 丢弃{discarded_num}条数据", "展示前100条数据")
+            
+            sql_query_str = f"""
+                SELECT *
+                FROM share_pipeline.ads_custom_annotation_tags
+                WHERE annotation_type = '{category}'
+                    AND tag_name = '{tag_name}'
+                    AND tag_value != 0
+                limit 100;
+            """
+            df_discard = load_df_from_mysql(sql_query_str)
+            st.dataframe(df)
+
+
+    elif chosen_id == 'data_mining':
+        category = annotation_categories[st.selectbox("选择数据类型", list(annotation_categories.keys()))]
+        # faiss_index = create_faiss_index(processed_dataset['__dj__image_embedding'])
         model, processor = load_model()
 
         # 用户输入文本框
-        input_text = st.text_input("", 'a picture of horse')
-
-        # 搜索按钮
-        search_button = st.button("搜索", type="primary", use_container_width=True)
+        input_text = st.text_input("请输入搜索文本", 'truck')
+        search_button = st.button("开始搜索", type="primary", use_container_width=False)
 
         if search_button:
             inputs = processor(text=input_text, return_tensors="pt")
             text_output = model.text_encoder(inputs.input_ids, attention_mask=inputs.attention_mask, return_dict=True) 
             text_feature = F.normalize(model.text_proj(text_output.last_hidden_state[:, 0, :]), dim=-1).detach().cpu().numpy() 
+            text_feature = text_feature[0].astype('float32').tolist()
 
-            D, I = faiss_index.search(text_feature.astype('float32'), 10)
-            retrieval_image_list = [processed_dataset['image'][i] for i in I[0]]
-            display_image_grid(retrieval_image_list, 5, 300)
-            # Display the retrieved images using st.image
-            # for image_path in retrieval_image_list:
-            #     st.image(image_path, caption='Retrieved Image', use_column_width=False)
+            starrocks_helper = get_starrocks_helper(database='share_pipeline')
+            meta_qur_sql=f"""
+                    select ext_tag_value, cosine_similarity(array<float>{text_feature}, ext_vectors) AS similarity 
+                    from share_pipeline.ads_custom_annotation_tags
+                    where annotation_type='{category}' and tag_name = ''
+                    ORDER BY similarity DESC
+                        limit 10;
+                """
+            
+            df = starrocks_helper.read_db_to_df(meta_qur_sql)
+            starrocks_helper.close()
+            if df.empty:
+                st.warning("该品类数据暂未入库")
+                st.stop()
+            for idx, info in enumerate(df.ext_tag_value.to_list()):
+                info = json.loads(info)
+                image_path = os.path.join('/', info['image_path'])
+                caption = info['image_caption']
+                content = f'Similarity: {df.iloc[idx]["similarity"]}  \n Image_path: {image_path}  \n Image_caption: {caption}'
+                st.image(image_path, caption='', use_column_width=False, width=600)
+                st.write(content)
 
-    with tab_data_insights:
-        # st.markdown("<h1 style='text-align: center; font-size:25px; color: black;'>以文搜图", unsafe_allow_html=True)
-        if '__dj__image_embedding_2d' not in processed_dataset.features:
-            st.warning('请先执行数据处理流程(加入特征提取的算子) !')
-            st.stop()
-        st.markdown("<h1 style='text-align: center; font-size:25px; color: black;'>数据分布可视化", unsafe_allow_html=True)
-        plot = plot_image_clusters(processed_dataset)
-        st.altair_chart(plot)
+    elif chosen_id == 'data_insights':
+
+        all_options = list(annotation_categories.keys())
+        col1, col2, col3 = st.columns(3)
+
+        # 左边栏选择数据集
+        with col1:
+            selected_dataset_1 = st.selectbox('选择数据集1', all_options)
+
+        # 右边栏选择数据集
+        with col2:
+            selected_dataset_2 = st.selectbox('选择数据集2', ['None'] + all_options)
+
+        with col3:
+            st.write(' ')
+            analysis_button = st.button("开始分析数据", type="primary", use_container_width=False)
+
+        # 列选择：annotation_type,sensor_name,bundle_path,annotation_path,demand_source
+        df1 = load_data_from_starrocks(annotation_categories[selected_dataset_1])
+
+        if selected_dataset_2 != 'None':
+            df2 = load_data_from_starrocks(annotation_categories[selected_dataset_2])
+
+        if analysis_button:
+
+            # st.markdown('<iframe src="http://datacentric.club:3000/" width="1000" height="600"></iframe>', unsafe_allow_html=True)
+            # st.map()
+            with st.expander('数据集对比分析', expanded=True):
+                with st.spinner('Wait for process...'):
+                    if selected_dataset_2 == 'None':
+                        report = sv.analyze(df1)
+                    else:
+                        report = sv.compare(df1, df2)
+                report.show_html(filepath='./frontend/public/EDA.html', open_browser=False, layout='vertical', scale=1.0)
+                components.html(open('./frontend/public/EDA.html').read(), width=1100, height=1200, scrolling=True)
