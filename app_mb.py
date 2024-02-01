@@ -6,36 +6,50 @@
 """
 import PIL
 import streamlit as st
+import streamlit_authenticator as stauth
+from streamlit_option_menu import option_menu
+import yaml
 import data_juicer.platform.src.pages.doc
 import data_juicer.platform.src.pages.home
 import data_juicer.platform.src.pages.data_process
 import data_juicer.platform.src.pages.data_analysis
-# import data_juicer.platform.src.pages.model_analysis
-import streamlit as st
-from streamlit_option_menu import option_menu
-import streamlit_authenticator as stauth
 
-
-# Page Favicon
+# Read page configuration
 favicon = PIL.Image.open('./data_juicer/platform/src/assets/favicon.png')
-st.set_page_config(page_title='MtBuller', page_icon=favicon, layout='wide', initial_sidebar_state='auto')
+st.set_page_config(
+    page_title='MtBuller',
+    page_icon=favicon,
+    layout='wide',
+    initial_sidebar_state='auto'
+)
+
+# Read authentication configuration
+with open('configs/authenticator.yaml') as file:
+    config = yaml.load(file, Loader=yaml.SafeLoader)
+
+authenticator = stauth.Authenticate(
+    config['credentials'],
+    config['cookie']['name'],
+    config['cookie']['key'],
+    config['cookie']['expiry_days'],
+    config['preauthorized']
+)
+
 
 def main():
-    # Page Title
-    # Bootstrap Icons: https://icons.getbootstrap.com/
+    # Define application list
     apps = [
         {"func": data_juicer.platform.src.pages.home, "title": "首页", "icon": "house"},
         {"func": data_juicer.platform.src.pages.data_process, "title": "数据处理", "icon": "caret-right-square"},
         {"func": data_juicer.platform.src.pages.data_analysis, "title": "数据结果分析", "icon": "bar-chart-line"},
-        # {"func": src.pages.model_analysis, "title": "Model Analysis", "icon": "pie-chart"},
         {"func": data_juicer.platform.src.pages.doc, "title": "文档", "icon": "book"},
     ]
-
+    
     titles = [app["title"] for app in apps]
     titles_lower = [title.lower() for title in titles]
     icons = [app["icon"] for app in apps]
 
-    params = st.experimental_get_query_params()
+    params = st.query_params
     default_index = titles_lower.index(params.get("page", [titles[0].lower()])[0].lower())
 
     with st.sidebar:
@@ -52,11 +66,29 @@ def main():
                 "nav-link-selected": {"background-color": "#24A608"}
             }
         )
+        st.write(f'Welcome *{st.session_state["name"]}*')
+        authenticator.logout()
 
     for app in apps:
         if app["title"] == selected:
             app["func"].write()
-            break
+            break   
 
 if __name__ == '__main__':
-    main()
+    # Authentication
+    name, authentication_status, username = authenticator.login(
+        fields={
+            'Form name': 'Login-AI智能数据处理平台',
+            'Username': 'Username',
+            'Password': 'Password',
+            'Login': 'Login'
+        }
+    )
+    
+    # Execute the main program based on the authentication status
+    if st.session_state["authentication_status"]:
+        main()
+    elif st.session_state["authentication_status"] is False:
+        st.error('Username/password is incorrect')
+    elif st.session_state["authentication_status"] is None:
+        st.warning('Please enter your username and password')
