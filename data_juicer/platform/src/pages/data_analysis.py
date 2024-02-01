@@ -170,8 +170,29 @@ def write():
                            file_name='discarded.jsonl')
 
     elif chosen_id == 'data_mining':
+        html_code = """
+            <style>
+            .responsive-iframe-container {
+                position: relative;
+                overflow: hidden;
+                padding-top: 56.25%; /* 16:9 Aspect Ratio (divide 9 by 16 = 0.5625) */
+            }
+            .responsive-iframe-container iframe {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+            }
+            </style>
+            <div class="responsive-iframe-container">
+            <iframe src="http://datacentric.club:8501/" allowfullscreen></iframe>
+            </div>
+            """
         # st.markdown("<h1 style='text-align: center; font-size:25px; color: black;'>以文搜图", unsafe_allow_html=True)
-        st.markdown('<iframe src="http://datacentric.club:8501" width="1000" height="600"></iframe>', unsafe_allow_html=True)
+        st.markdown(html_code, unsafe_allow_html=True)
+
+        # st.markdown('<iframe src="http://0.0.0.0:8501" width="1000" height="600"></iframe>', unsafe_allow_html=True)
         # if '__dj__image_embedding_2d' not in processed_dataset.features:
         #     st.warning('请先执行数据处理流程(加入特征提取的算子) !')
         #     st.stop()
