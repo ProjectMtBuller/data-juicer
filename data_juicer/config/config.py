@@ -138,6 +138,11 @@ def init_configs(args=None):
         default='image',
         help='Key name of field to store the list of sample image paths.')
     parser.add_argument(
+        '--point_cloud_key',
+        type=str,
+        default='point_clouds',
+        help='Key name of field to store the list of sample point cloud paths.')
+    parser.add_argument(
         '--image_special_token',
         type=str,
         default=SpecialTokens.image,
@@ -402,10 +407,12 @@ def init_setup_from_cfg(cfg):
                 args = {
                     'text_key': text_key,
                     'image_key': cfg.image_key,
+                    'point_cloud_key': cfg.point_cloud_key
                 }
             elif args['text_key'] is None:
                 args['text_key'] = text_key
                 args['image_key'] = cfg.image_key
+                args['point_cloud_key'] = cfg.point_cloud_key
             op[op_name] = args
 
     return cfg
