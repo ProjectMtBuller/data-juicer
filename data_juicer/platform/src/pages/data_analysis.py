@@ -45,15 +45,25 @@ def create_faiss_index(emb_list):
     faiss_index.add(image_embeddings)
     return faiss_index
 
-def display_dataset(dataframe, cond, show_num, desp, type, all=True):
-    examples = dataframe.loc[cond]
+def display_dataset(dataset, cond, show_num, desp, type, all=True):
+    # examples = dataframe.loc[cond]
+    # if all or len(examples) > 0:
+    #     st.subheader(
+    #         f'{desp}: :red[{len(examples)}] of '
+    #         f'{len(dataframe.index)} {type} '
+    #         f'(:red[{len(examples)/len(dataframe.index) * 100:.2f}%])')
+
+    #     st.dataframe(examples[:show_num], use_container_width=True)
+    
+    examples = dataset.select(np.where(cond)[0])
+    # examples = dataset.loc[cond]
     if all or len(examples) > 0:
         st.subheader(
             f'{desp}: :red[{len(examples)}] of '
-            f'{len(dataframe.index)} {type} '
-            f'(:red[{len(examples)/len(dataframe.index) * 100:.2f}%])')
-
-        st.dataframe(examples[:show_num], use_container_width=True)
+            f'{len(dataset)} {type} '
+            f'(:red[{len(examples)/len(dataset) * 100:.2f}%])')
+        dataframe = pd.DataFrame(examples)
+        st.write(dataframe[:show_num])
 
 
 def display_image_grid(urls, cols=3, width=300):
@@ -71,7 +81,7 @@ def display_image_grid(urls, cols=3, width=300):
     st.image(image_grid, channels="RGB")
 
 
-@st.cache_data
+# @st.cache_data
 def convert_to_jsonl(df):
     return df.to_json(orient='records', lines=True, force_ascii=False).encode('utf_8_sig')
 
@@ -128,7 +138,9 @@ def write():
         return None
 
     if chosen_id == 'data_show':
+        dc_df = processed_dataset.remove_columns(["attributes", "labels"])
         category = st.selectbox("选择数据类型", list(data_source.keys()))
+        dc_df = dc_df.filter(lambda example: example['data_source'] == data_source[category])
 
     if chosen_id == 'data_cleaning':
         dc_df = processed_dataset.remove_columns(["attributes", "labels"])
@@ -137,6 +149,7 @@ def write():
         filter_nums = {}
         # iterate over the dataset to count the number of samples that are discarded
         all_conds = np.ones(len(dc_df['image']), dtype=bool)
+        print("ori all conds: ", all_conds)
         for key in dc_df.features:
             if 'issue' not in key:
                 continue
@@ -223,15 +236,17 @@ def write():
                     for col, ori_img, dup_imgs in zip(cols, ori_images[i:i+images_per_col], dup_images[i:i+images_per_col]):
                         display_image = plot_dup_images(ori_img, dup_imgs)
                         col.pyplot(display_image)              
-                    
+        
+        print(all_conds)
         display_dataset(dc_df, all_conds, 10, 'Retained sampels', 'images')
-        # st.download_button('Download Retained data as JSONL',
-        #                    data=convert_to_jsonl(ds.loc[all_conds]),
-        #                    file_name='retained.jsonl')
+        import json
+        st.download_button('Download Retained data as JSONL',
+                           data=convert_to_jsonl(dc_df.select(np.where(all_conds)[0]).to_pandas()),
+                           file_name='retained.jsonl')
         display_dataset(dc_df, np.invert(all_conds), 10, 'Discarded sampels', 'images')
-        # st.download_button('Download Discarded data as JSONL',
-        #                    data=convert_to_jsonl(ds.loc[np.invert(all_conds)]),
-        #                    file_name='discarded.jsonl')
+        st.download_button('Download Discarded data as JSONL',
+                           data=convert_to_jsonl(dc_df.select(np.where(np.invert(all_conds))[0]).to_pandas()),
+                           file_name='discarded.jsonl')
 
     elif chosen_id == 'data_mining':
         html_code = """
