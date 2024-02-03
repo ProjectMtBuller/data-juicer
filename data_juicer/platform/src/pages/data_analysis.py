@@ -111,7 +111,7 @@ def write():
         st.stop()
 
     # TODO: Automatically find data source
-    data_source = ['BDD100K-train', 'BDD100K-val', 'BDD100K-test']
+    data_source = {'BDD100K-train': 'train', 'BDD100K-val': 'val', 'BDD100K-test': 'test'}
     issue_dict = {'重复': '__dj__is_image_duplicated_issue',
                 '低信息': '__dj__is_low_information_issue',                 
                 '特殊大小': '__dj__is_odd_size_issue', 
@@ -128,11 +128,12 @@ def write():
         return None
 
     if chosen_id == 'data_show':
-        category = st.selectbox("选择数据类型", data_source)
+        category = st.selectbox("选择数据类型", list(data_source.keys()))
 
     if chosen_id == 'data_cleaning':
         dc_df = processed_dataset.remove_columns(["attributes", "labels"])
-        category = st.selectbox("选择数据类型", data_source)
+        category = st.selectbox("选择数据类型", list(data_source.keys()))
+        dc_df = dc_df.filter(lambda example: example['data_source'] == data_source[category])
         filter_nums = {}
         # iterate over the dataset to count the number of samples that are discarded
         all_conds = np.ones(len(dc_df['image']), dtype=bool)
@@ -145,6 +146,11 @@ def write():
         @st.cache_data
         @st.cache_resource
         def draw_sankey_diagram(source_data, target_data, value_data, labels):
+            """https://plotly.com/python/sankey-diagram/"""
+            print(source_data)
+            print(target_data)
+            print(value_data)
+            print(labels)
             fig = go.Figure(data=[go.Sankey(
                 node=dict(
                     pad=15,
@@ -161,17 +167,18 @@ def write():
             fig.update_layout(title_text="数据清洗比例统计", title_font=dict(size=25), font_size=16)
             st.plotly_chart(fig)
 
-        cnt = 1
-        source_data = [0]
-        target_data = [cnt]
+        cnt = 2
+        source_data = [0, 0]
+        target_data = [cnt - 1, cnt]
         # value_data = [1 - sum(filter_nums.values()) / len(dc_df['image'])]
         value_data = [sum(all_conds) / len(dc_df['image'])]
-        labels = ['Origin', 'Retained: ' + str(round(value_data[0]*100, 2)) + '%']
+        value_data.append(1 - value_data[0])
+        labels = ['原始数据', '保留: ' + str(round(value_data[0]*100, 2)) + '%', '问题数据: ' + str(round(value_data[1]*100, 2)) + '%']
         for key, value in filter_nums.items():
             if value == 0:
                 continue
             cnt += 1
-            source_data.append(0)
+            source_data.append(2)
             target_data.append(cnt)
             value_data.append(value/len(dc_df[key]))
             labels.append(find_key_by_value(issue_dict, key) + ": " + str(round(value_data[-1]*100, 2)) + '%')
@@ -184,19 +191,24 @@ def write():
                 cat_issue_dict[key] = value
         
         images_per_col = 3
+        st.text("")
+        st.markdown("""
+                    <style>
+                    .big-font {
+                        font-size:25px !important;
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+        st.markdown('<p class="big-font">数据清洗结果展示</p>', unsafe_allow_html=True)
         category_issue = st.selectbox("选择错误类型", list(cat_issue_dict.keys()))
-        amount = st.slider("展示数量", min_value=1, max_value=10, value=3, step=1)
-        if st.button("点击展示随机图像"):
-            print(type(dc_df))
-            print(dc_df)
+        # amount = st.slider("展示数量", min_value=1, max_value=10, value=3, step=1)
+        amount = 3
+        if category_issue:
             # selected_issues = dc_df[dc_df[issue_dict[category_issue]] == True]
             selected_issues = dc_df.filter(lambda example: example[issue_dict[category_issue]] == True)
             # selected_rows = selected_issues.sample(min(amount, len(selected_issues)))
             # selected_rows = selected_issues.sample(seed=42).select([0, 1, 2, 3, 4])
-            print("a", type(selected_issues))
-            print("b", selected_issues)
             selected_rows = selected_issues.shuffle()[:amount]
-            print("c", selected_rows)
             if category_issue != '重复':
                 random_images = selected_rows['image']
                 for i in range(0, len(random_images), images_per_col):
@@ -212,11 +224,11 @@ def write():
                         display_image = plot_dup_images(ori_img, dup_imgs)
                         col.pyplot(display_image)              
                     
-        # display_dataset(ds, all_conds, 10, 'Retained sampels', 'images')
+        display_dataset(dc_df, all_conds, 10, 'Retained sampels', 'images')
         # st.download_button('Download Retained data as JSONL',
         #                    data=convert_to_jsonl(ds.loc[all_conds]),
         #                    file_name='retained.jsonl')
-        # display_dataset(ds, np.invert(all_conds), 10, 'Discarded sampels', 'images')
+        display_dataset(dc_df, np.invert(all_conds), 10, 'Discarded sampels', 'images')
         # st.download_button('Download Discarded data as JSONL',
         #                    data=convert_to_jsonl(ds.loc[np.invert(all_conds)]),
         #                    file_name='discarded.jsonl')
